@@ -53,6 +53,7 @@ function InteractiveAvatar() {
   const [isListening, setIsListening] = useState(false);
   const mediaStream = useRef<HTMLVideoElement>(null);
   const isProcessingRef = useRef(false);
+  const hasGreetedRef = useRef(false); // 인사말 한 번만 실행하도록
 
   async function fetchAccessToken() {
     try {
@@ -87,13 +88,22 @@ function InteractiveAvatar() {
   };
 
   const speakWithAvatar = async (text: string) => {
-    if (!avatarRef.current || !text) return;
+    console.log("=== Attempting to speak ===");
+    console.log("Avatar ref exists:", !!avatarRef.current);
+    console.log("Text to speak:", text);
+    
+    if (!avatarRef.current || !text) {
+      console.log("Cannot speak - missing avatar or text");
+      return;
+    }
     
     try {
+      console.log("Calling avatar.speak()...");
       await avatarRef.current.speak({
         text: text,
         taskType: TaskType.TALK,
       });
+      console.log("Speak successful!");
     } catch (error) {
       console.error("Avatar speak error:", error);
     }
@@ -126,12 +136,37 @@ function InteractiveAvatar() {
       const newToken = await fetchAccessToken();
       const avatarInstance = initAvatar(newToken);
 
-      avatarInstance.on(StreamingEvents.STREAM_READY, (event) => {
+      // STREAM_READY 이벤트에서 인사말 실행
+      avatarInstance.on(StreamingEvents.STREAM_READY, async (event) => {
         console.log(">>>>> Stream ready:", event.detail);
+        
+        // 인사말을 한 번만 실행하도록
+        if (!hasGreetedRef.current) {
+          try {
+            console.log("Starting voice chat...");
+            await avatarInstance.startVoiceChat();
+            console.log("Voice chat started - using OpenAI for responses");
+            
+            // Voice chat 완전 초기화 대기
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            
+            // 인사말 실행
+            const greeting = "안녕하세요? 저는 치매 예방 게임 도우미입니다. 도움이 필요하시다면 언제든지 말씀해주세요.";
+            console.log("Sending greeting...");
+            await speakWithAvatar(greeting);
+            setChatHistory([{ role: "assistant", content: greeting }]);
+            console.log("Greeting sent successfully!");
+            
+            hasGreetedRef.current = true;
+          } catch (error) {
+            console.error("Error in greeting sequence:", error);
+          }
+        }
       });
       
       avatarInstance.on(StreamingEvents.STREAM_DISCONNECTED, () => {
         console.log("Stream disconnected");
+        hasGreetedRef.current = false; // 재연결 시 다시 인사하도록
       });
 
       avatarInstance.on(StreamingEvents.USER_START, () => {
@@ -153,15 +188,6 @@ function InteractiveAvatar() {
       });
 
       await startAvatar(config);
-
-      await avatarInstance.startVoiceChat();
-      console.log("Voice chat started - using OpenAI for responses");
-
-      setTimeout(async () => {
-        const greeting = "안녕하세요? 저는 치매 예방 게임 도우미입니다. 도움이 필요하시다면 언제든지 말씀해주세요.";
-        await speakWithAvatar(greeting);
-        setChatHistory([{ role: "assistant", content: greeting }]);
-      }, 1000);
       
     } catch (error) {
       console.error("Error starting avatar session:", error);
@@ -196,6 +222,7 @@ function InteractiveAvatar() {
 
   useUnmount(() => {
     stopAvatar();
+    hasGreetedRef.current = false;
   });
 
   useEffect(() => {
