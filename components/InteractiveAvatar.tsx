@@ -225,6 +225,11 @@ function InteractiveAvatar() {
     hasGreetedRef.current = false;
   });
 
+    // 🆕 자동 시작 추가
+  useEffect(() => {
+    startSession();
+  }, []);
+
   useEffect(() => {
     if (stream && mediaStream.current) {
       mediaStream.current.srcObject = stream;
