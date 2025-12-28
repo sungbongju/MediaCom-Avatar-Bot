@@ -156,9 +156,9 @@ function InteractiveAvatar() {
             
             await new Promise(resolve => setTimeout(resolve, 1500));
             
-            const greeting = "const greeting = userNameRef.current 
+            const greeting = userNameRef.current 
               ? `안녕하세요 ${userNameRef.current}님! 저는 치매 예방 게임 도우미입니다. 도움이 필요하시다면 언제든지 말씀해주세요.`
-              : "안녕하세요! 저는 치매 예방 게임 도우미입니다. 도움이 필요하시다면 언제든지 말씀해주세요.";";
+              : "안녕하세요! 저는 치매 예방 게임 도우미입니다. 도움이 필요하시다면 언제든지 말씀해주세요.";
             console.log("Sending greeting...");
             await speakWithAvatar(greeting);
             setChatHistory([{ role: "assistant", content: greeting }]);
