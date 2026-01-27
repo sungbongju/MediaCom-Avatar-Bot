@@ -12,6 +12,9 @@
  * 
  * 🔧 2026-01-12 수정:
  * - ElevenLabs 다국어 모델 → HeyGen 한국어 전용 음성 (SunHi) 변경
+ * 
+ * 🔧 2026-01-27 수정:
+ * - allowedOrigins에 sungbongju.github.io 추가
  * ================================================
  */
 
@@ -532,6 +535,7 @@ function InteractiveAvatar() {
       // origin 검증 (보안)
       const allowedOrigins = [
         "https://sdkparkforbi.github.io",
+        "https://sungbongju.github.io",  // 🆕 본인 GitHub Pages 추가
         "http://localhost",
         "http://127.0.0.1",
       ];
