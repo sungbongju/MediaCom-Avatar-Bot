@@ -1,34 +1,45 @@
+/**
+ * ================================================
+ * InteractiveAvatar.tsx - 경영학전공 AI 가이드
+ * ================================================
+ *
+ * 기능:
+ * 1. 탭 클릭 → postMessage → route.ts에서 고정 스크립트 → REPEAT 발화
+ * 2. 음성 질문 → Web Speech API → OpenAI → REPEAT 발화
+ * 3. 텍스트 질문 → OpenAI → REPEAT 발화
+ *
+ * 핵심: 아바타가 말할 때 Web Speech 일시정지 → 자기 목소리 인식 방지
+ * 
+ * 🔧 2026-01-12 수정:
+ * - ElevenLabs 다국어 모델 → HeyGen 한국어 전용 음성 (SunHi) 변경
+ * ================================================
+ */
+
 import {
   AvatarQuality,
   StreamingEvents,
-  VoiceChatTransport,
   VoiceEmotion,
   StartAvatarRequest,
-  STTProvider,
-  ElevenLabsModel,
   TaskType,
 } from "@heygen/streaming-avatar";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import { useMemoizedFn, useUnmount } from "ahooks";
 
 import { useStreamingAvatarSession } from "./logic/useStreamingAvatarSession";
 import { StreamingAvatarProvider, StreamingAvatarSessionState } from "./logic";
-
 import { AVATARS } from "@/app/lib/constants";
+import { WebSpeechRecognizer } from "@/app/lib/webSpeechAPI";
 
-const DEFAULT_CONFIG: StartAvatarRequest = {
+// 아바타 설정 - Onyx 다국어 남성 음성 + Wayne 아바타 사용
+const AVATAR_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
-  avatarName: AVATARS[0].avatar_id,
+  avatarName: "Wayne_20240711",  // 한국인 남성 아바타
   voice: {
-    rate: 1.5,
-    emotion: VoiceEmotion.EXCITED,
-    model: ElevenLabsModel.eleven_flash_v2_5,
+    voiceId: "26b2064088674c80b1e5fc5ab1a068ea",  // Onyx (Multilingual)
+    rate: 1.0,
+    emotion: VoiceEmotion.FRIENDLY,
   },
   language: "ko",
-  voiceChatTransport: VoiceChatTransport.WEBSOCKET,
-  sttSettings: {
-    provider: STTProvider.DEEPGRAM,
-  },
 };
 
 interface ChatMessage {
@@ -46,31 +57,55 @@ function InteractiveAvatar() {
     avatarRef,
   } = useStreamingAvatarSession();
 
-  const [config] = useState<StartAvatarRequest>(DEFAULT_CONFIG);
+  // UI 상태
   const [inputText, setInputText] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [isListening, setIsListening] = useState(false);
+  const [isAvatarSpeaking, setIsAvatarSpeaking] = useState(false);
+  const [interimTranscript, setInterimTranscript] = useState("");
+  const [currentTab, setCurrentTab] = useState<string>("");
   const mediaStream = useRef<HTMLVideoElement>(null);
+
+  // 내부 상태 refs
   const isProcessingRef = useRef(false);
   const hasGreetedRef = useRef(false);
-  const hasStartedRef = useRef(false); // 중복 시작 방지
-  const userNameRef = useRef<string>('');
+  const hasStartedRef = useRef(false);
 
-  async function fetchAccessToken() {
+  // Web Speech API ref
+  const webSpeechRef = useRef<WebSpeechRecognizer | null>(null);
+  const isAvatarSpeakingRef = useRef(false);
+
+  // ============================================
+  // API 호출
+  // ============================================
+  const fetchAccessToken = async () => {
+    const response = await fetch("/api/get-access-token", { method: "POST" });
+    const token = await response.text();
+    console.log("Access Token:", token);
+    return token;
+  };
+
+  // 🎯 탭 설명 API 호출 (고정 스크립트 반환)
+  const fetchTabScript = async (tabId: string): Promise<string> => {
     try {
-      const response = await fetch("/api/get-access-token", {
+      const response = await fetch("/api/chat", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "tab_explain",
+          tabId: tabId,
+        }),
       });
-      const token = await response.text();
-      console.log("Access Token:", token);
-      return token;
+      const data = await response.json();
+      return data.reply || "설명을 불러올 수 없습니다.";
     } catch (error) {
-      console.error("Error fetching access token:", error);
-      throw error;
+      console.error("Tab script API error:", error);
+      return "죄송합니다. 오류가 발생했습니다.";
     }
-  }
+  };
 
+  // 💬 일반 채팅 API 호출 (OpenAI)
   const callOpenAI = async (message: string, history: ChatMessage[]) => {
     try {
       const response = await fetch("/api/chat", {
@@ -82,185 +117,511 @@ function InteractiveAvatar() {
         }),
       });
       const data = await response.json();
-      return data.reply;
+      console.log("📦 API raw response:", data);
+      return data; // 전체 객체 반환 { reply, action, tabId }
     } catch (error) {
       console.error("OpenAI API error:", error);
-      return "죄송합니다. 일시적인 오류가 발생했습니다. 다시 말씀해 주세요.";
+      return { reply: "죄송합니다. 일시적인 오류가 발생했습니다. 다시 말씀해 주세요.", action: "none", tabId: null };
     }
   };
 
-  const speakWithAvatar = async (text: string) => {
-    console.log("=== Attempting to speak ===");
-    console.log("Avatar ref exists:", !!avatarRef.current);
-    console.log("Text to speak:", text);
-    
-    if (!avatarRef.current || !text) {
-      console.log("Cannot speak - missing avatar or text");
+  // ============================================
+  // 아바타 음성 출력 (Web Speech 일시정지 포함)
+  // ============================================
+  const speakWithAvatar = useCallback(
+    async (text: string) => {
+      if (!avatarRef.current || !text) return;
+
+      try {
+        // 🔇 Web Speech 완전히 정지
+        console.log("🔇 Web Speech 일시정지");
+        isAvatarSpeakingRef.current = true;
+        setIsAvatarSpeaking(true);
+        webSpeechRef.current?.pause();
+
+        // 잠시 대기 (Web Speech가 완전히 멈출 때까지)
+        await new Promise((r) => setTimeout(r, 300));
+
+        // HeyGen 자동 응답 차단
+        try {
+          await avatarRef.current.interrupt();
+        } catch {
+          // ignore
+        }
+
+        console.log("🗣️ Avatar speaking:", text);
+        await avatarRef.current.speak({
+          text,
+          taskType: TaskType.REPEAT,
+        });
+      } catch (error) {
+        console.error("Avatar speak error:", error);
+        isAvatarSpeakingRef.current = false;
+        setIsAvatarSpeaking(false);
+        webSpeechRef.current?.resume();
+      }
+    },
+    [avatarRef],
+  );
+
+  // ============================================
+  // 🎤 사용자 음성 처리 (Web Speech API용)
+  // ============================================
+  const handleUserSpeech = useCallback(
+    async (transcript: string) => {
+      if (isAvatarSpeakingRef.current) {
+        console.log("⏸️ 아바타가 말하는 중 - 무시:", transcript);
+        return;
+      }
+
+      if (!transcript.trim() || isProcessingRef.current) return;
+
+      isProcessingRef.current = true;
+      setIsLoading(true);
+      setInterimTranscript("");
+      console.log("🎯 User said:", transcript);
+
+      setChatHistory((prev) => {
+        const newHistory = [
+          ...prev,
+          { role: "user" as const, content: transcript },
+        ];
+
+        callOpenAI(transcript, prev).then(async (response) => {
+          console.log("🎯 OpenAI response:", response);
+          
+          const reply = response.reply || response;
+          const action = response.action;
+          const navigateTabId = response.tabId;
+
+          setChatHistory((current) => [
+            ...current,
+            { role: "assistant" as const, content: reply },
+          ]);
+
+          // 아바타 발화
+          await speakWithAvatar(reply);
+
+          // 🎯 탭 이동 명령이 있으면 부모 페이지에 전달
+          if (action === "navigate" && navigateTabId) {
+            console.log("📑 Navigate to tab:", navigateTabId);
+            window.parent.postMessage({
+              type: "NAVIGATE_TAB",
+              tabId: navigateTabId
+            }, "*");
+          }
+
+          setIsLoading(false);
+          isProcessingRef.current = false;
+        });
+
+        return newHistory;
+      });
+    },
+    [speakWithAvatar],
+  );
+
+  // ============================================
+  // 🎯 탭 변경 처리
+  // ============================================
+  const handleTabChange = useCallback(
+    async (tabId: string) => {
+      if (isProcessingRef.current) return;
+      isProcessingRef.current = true;
+
+      console.log("📑 Tab changed:", tabId);
+      setCurrentTab(tabId);
+      setIsLoading(true);
+
+      // 🔇 먼저 Web Speech 일시정지
+      console.log("🔇 Tab change - Web Speech 일시정지");
+      isAvatarSpeakingRef.current = true;
+      setIsAvatarSpeaking(true);
+      webSpeechRef.current?.pause();
+
+      // 현재 발화 중이면 중단
+      if (avatarRef.current) {
+        try {
+          await avatarRef.current.interrupt();
+        } catch {
+          // ignore
+        }
+      }
+
+      // API에서 스크립트 가져오기
+      const script = await fetchTabScript(tabId);
+
+      // 아바타로 발화 (speakWithAvatar 내부에서 다시 pause 호출해도 OK)
+      if (avatarRef.current && script) {
+        try {
+          console.log("🗣️ Avatar speaking:", script);
+          await avatarRef.current.speak({
+            text: script,
+            taskType: TaskType.REPEAT,
+          });
+        } catch (error) {
+          console.error("Avatar speak error:", error);
+        }
+      }
+
+      setIsLoading(false);
+      isProcessingRef.current = false;
+    },
+    [avatarRef],
+  );
+
+  // ============================================
+  // Web Speech API 초기화
+  // ============================================
+  const initWebSpeech = useCallback(() => {
+    if (webSpeechRef.current) {
+      console.log("🎤 Web Speech 이미 초기화됨");
       return;
     }
-    
-    try {
-      console.log("Calling avatar.speak()...");
-      await avatarRef.current.speak({
-        text: text,
-        taskType: TaskType.REPEAT,
-      });
-      console.log("Speak successful!");
-    } catch (error) {
-      console.error("Avatar speak error:", error);
-    }
-  };
 
-  const handleUserSpeech = useMemoizedFn(async (transcript: string) => {
-    if (!transcript.trim() || isProcessingRef.current) return;
-    
-    isProcessingRef.current = true;
-    setIsLoading(true);
-    
-    console.log("User said:", transcript);
-    
-    const newHistory = [...chatHistory, { role: "user" as const, content: transcript }];
-    setChatHistory(newHistory);
-    
-    const reply = await callOpenAI(transcript, chatHistory);
-    console.log("OpenAI reply:", reply);
-    
-    setChatHistory([...newHistory, { role: "assistant" as const, content: reply }]);
-    
-    await speakWithAvatar(reply);
-    
-    setIsLoading(false);
+    if (!WebSpeechRecognizer.isSupported()) {
+      console.error("🎤 Web Speech API 지원하지 않는 브라우저");
+      alert(
+        "이 브라우저는 음성 인식을 지원하지 않습니다. Chrome 또는 Edge를 사용해주세요.",
+      );
+      return;
+    }
+
+    console.log("🎤 Web Speech API 초기화 중...");
+
+    webSpeechRef.current = new WebSpeechRecognizer(
+      {
+        onResult: (transcript: string, isFinal: boolean) => {
+          if (isAvatarSpeakingRef.current) {
+            return;
+          }
+
+          if (isFinal) {
+            console.log("🎤 최종 인식:", transcript);
+            setInterimTranscript("");
+            handleUserSpeech(transcript);
+          } else {
+            setInterimTranscript(transcript);
+          }
+        },
+
+        onStart: () => {
+          if (!isAvatarSpeakingRef.current) {
+            setIsListening(true);
+          }
+        },
+
+        onEnd: () => {
+          setIsListening(false);
+        },
+
+        onSpeechStart: () => {
+          if (!isAvatarSpeakingRef.current) {
+            setIsListening(true);
+          }
+        },
+
+        onSpeechEnd: () => {
+          setTimeout(() => {
+            if (!isAvatarSpeakingRef.current) {
+              setIsListening(false);
+            }
+          }, 500);
+        },
+
+        onError: (error: string) => {
+          console.error("🎤 Web Speech 에러:", error);
+          if (error === "not-allowed") {
+            alert(
+              "마이크 권한이 필요합니다. 브라우저 설정에서 마이크를 허용해주세요.",
+            );
+          }
+        },
+      },
+      {
+        lang: "ko-KR",
+        continuous: true,
+        interimResults: true,
+        autoRestart: true,
+      },
+    );
+
+    console.log("🎤 Web Speech API 초기화 완료");
+  }, [handleUserSpeech]);
+
+  // ============================================
+  // 세션 초기화
+  // ============================================
+  const resetSession = useMemoizedFn(async () => {
+    console.log("🔄 세션 초기화 중...");
+
+    // Web Speech 정리
+    if (webSpeechRef.current) {
+      webSpeechRef.current.destroy();
+      webSpeechRef.current = null;
+    }
+
+    // HeyGen 세션 정리 (여러 방법 시도)
+    try {
+      if (avatarRef.current) {
+        await avatarRef.current.stopAvatar();
+      }
+    } catch (e) {
+      console.log("stopAvatar 에러 (무시):", e);
+    }
+
+    try {
+      await stopAvatar();
+    } catch (e) {
+      console.log("stopAvatar hook 에러 (무시):", e);
+    }
+
+    // 상태 초기화
+    hasStartedRef.current = false;
+    hasGreetedRef.current = false;
     isProcessingRef.current = false;
+    isAvatarSpeakingRef.current = false;
+    setChatHistory([]);
+    setIsLoading(false);
+    setIsListening(false);
+    setIsAvatarSpeaking(false);
+    setInterimTranscript("");
+    setCurrentTab("");
+
+    await new Promise((r) => setTimeout(r, 1000)); // 1초 대기
+    console.log("🔄 세션 초기화 완료");
   });
 
+  // ============================================
+  // 세션 시작
+  // ============================================
   const startSession = useMemoizedFn(async () => {
-    // 중복 시작 방지
     if (hasStartedRef.current) {
-      console.log("Session already started, skipping...");
+      console.log("⚠️ 이미 세션 시작됨, 무시");
       return;
     }
     hasStartedRef.current = true;
-    
-    try {
-      const newToken = await fetchAccessToken();
-      const avatarInstance = initAvatar(newToken);
 
-      avatarInstance.on(StreamingEvents.STREAM_READY, async (event) => {
-        console.log(">>>>> Stream ready:", event.detail);
-        
+    try {
+      const token = await fetchAccessToken();
+      const avatar = initAvatar(token);
+
+      avatar.on(StreamingEvents.STREAM_READY, async (event) => {
+        console.log("Stream ready:", event.detail);
+
         if (!hasGreetedRef.current) {
-          try {
-            console.log("Starting voice chat...");
-            await avatarInstance.startVoiceChat();
-            console.log("Voice chat started - using OpenAI for responses");
-            
-            await new Promise(resolve => setTimeout(resolve, 1500));
-            
-            const greeting = userNameRef.current 
-              ? `안녕하세요 ${userNameRef.current}님! 저는 치매 예방 게임 도우미입니다. 도움이 필요하시다면 언제든지 말씀해주세요.`
-              : "안녕하세요! 저는 치매 예방 게임 도우미입니다. 도움이 필요하시다면 언제든지 말씀해주세요.";
-            console.log("Sending greeting...");
-            await speakWithAvatar(greeting);
-            setChatHistory([{ role: "assistant", content: greeting }]);
-            console.log("Greeting sent successfully!");
-            
-            hasGreetedRef.current = true;
-          } catch (error) {
-            console.error("Error in greeting sequence:", error);
-          }
+          await new Promise((r) => setTimeout(r, 1500));
+
+          const greeting =
+            "안녕하세요! 차의과학대학교 경영학전공 AI 가이드입니다. 궁금한 탭을 클릭하거나, 질문을 말씀해주세요!";
+
+          console.log("👋 인사말:", greeting);
+          await speakWithAvatar(greeting);
+          setChatHistory([{ role: "assistant", content: greeting }]);
+          hasGreetedRef.current = true;
         }
       });
-      
-      avatarInstance.on(StreamingEvents.STREAM_DISCONNECTED, () => {
+
+      avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
         console.log("Stream disconnected");
         hasGreetedRef.current = false;
-        hasStartedRef.current = false; // 재연결 가능하도록
+        hasStartedRef.current = false;
+
+        webSpeechRef.current?.destroy();
+        webSpeechRef.current = null;
       });
 
-      avatarInstance.on(StreamingEvents.USER_START, () => {
-        console.log("User started speaking");
-        setIsListening(true);
+      avatar.on(StreamingEvents.AVATAR_START_TALKING, () => {
+        console.log("🗣️ Avatar started talking - Web Speech 일시정지");
+        isAvatarSpeakingRef.current = true;
+        setIsAvatarSpeaking(true);
+        webSpeechRef.current?.pause();
       });
 
-      avatarInstance.on(StreamingEvents.USER_STOP, () => {
-        console.log("User stopped speaking");
-        setIsListening(false);
+      avatar.on(StreamingEvents.AVATAR_STOP_TALKING, async () => {
+        console.log("🔈 Avatar stopped talking - Web Speech 재개");
+        isAvatarSpeakingRef.current = false;
+        setIsAvatarSpeaking(false);
+
+        await new Promise((r) => setTimeout(r, 500));
+        webSpeechRef.current?.resume();
+        console.log("🎤 Web Speech 재개 완료");
       });
 
-      avatarInstance.on(StreamingEvents.USER_END_MESSAGE, (event) => {
-        const finalMessage = event.detail?.message;
-        console.log("User final message:", finalMessage);
-        if (finalMessage && finalMessage.trim()) {
-          handleUserSpeech(finalMessage);
-        }
-      });
+      await startAvatar(AVATAR_CONFIG);
 
-      await startAvatar(config);
-      
+      console.log("🎤 Web Speech API 시작...");
+      initWebSpeech();
+
+      setTimeout(() => {
+        webSpeechRef.current?.start();
+        console.log("🎤 Web Speech 인식 시작");
+      }, 2000);
     } catch (error) {
-      console.error("Error starting avatar session:", error);
-      hasStartedRef.current = false; // 에러 시 재시도 가능하도록
+      console.error("Session error:", error);
+      hasStartedRef.current = false;
     }
   });
 
+  // ============================================
+  // 텍스트 메시지 전송
+  // ============================================
   const handleSendMessage = useMemoizedFn(async () => {
-    const textToSend = inputText.trim();
-    if (!textToSend || !avatarRef.current || isLoading) return;
+    const text = inputText.trim();
+    if (!text || !avatarRef.current || isLoading) return;
 
     setInputText("");
     setIsLoading(true);
 
-    const newHistory = [...chatHistory, { role: "user" as const, content: textToSend }];
+    const newHistory = [
+      ...chatHistory,
+      { role: "user" as const, content: text },
+    ];
+
     setChatHistory(newHistory);
 
-    const reply = await callOpenAI(textToSend, chatHistory);
+    const response = await callOpenAI(text, chatHistory);
+    
+    const reply = response.reply || response;
+    const action = response.action;
+    const navigateTabId = response.tabId;
 
-    setChatHistory([...newHistory, { role: "assistant" as const, content: reply }]);
+    setChatHistory([
+      ...newHistory,
+      { role: "assistant" as const, content: reply },
+    ]);
 
     await speakWithAvatar(reply);
+
+    // 🎯 탭 이동 명령이 있으면 부모 페이지에 전달
+    if (action === "navigate" && navigateTabId) {
+      console.log("📑 Navigate to tab:", navigateTabId);
+      window.parent.postMessage({
+        type: "NAVIGATE_TAB",
+        tabId: navigateTabId
+      }, "*");
+    }
 
     setIsLoading(false);
   });
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSendMessage();
+  // ============================================
+  // 마이크 토글 버튼 핸들러
+  // ============================================
+  const toggleMicrophone = useCallback(() => {
+    if (!webSpeechRef.current) {
+      initWebSpeech();
+      setTimeout(() => {
+        webSpeechRef.current?.start();
+      }, 100);
+      return;
     }
-  };
 
-  useUnmount(() => {
-    stopAvatar();
-    hasGreetedRef.current = false;
-    hasStartedRef.current = false;
-  });
+    if (webSpeechRef.current.getIsPaused()) {
+      webSpeechRef.current.resume();
+    } else {
+      webSpeechRef.current.pause();
+    }
+  }, [initWebSpeech]);
 
-  // 🆕 게임 시작 메시지 받으면 시작
+  // ============================================
+  // postMessage 통신 (메인 페이지와)
+  // ============================================
   useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data && event.data.type === 'START_AVATAR') {
-        console.log('📥 게임에서 시작 신호 받음!');
-        console.log('📥 받은 데이터:', event.data);  // 🆕 추가
-        console.log('📥 이름:', event.data.name);    // 🆕 추가
-        if (event.data.name) {
-          userNameRef.current = event.data.name;
-        }
-        startSession();
+    const handleMessage = async (event: MessageEvent) => {
+      // origin 검증 (보안)
+      const allowedOrigins = [
+        "https://sdkparkforbi.github.io",
+        "http://localhost",
+        "http://127.0.0.1",
+      ];
+
+      const isAllowed = allowedOrigins.some((origin) =>
+        event.origin.startsWith(origin)
+      );
+
+      if (!isAllowed) {
+        console.log("⚠️ Ignored message from:", event.origin);
+        return;
+      }
+
+      const { type, tabId } = event.data || {};
+      console.log("📥 Received message:", { type, tabId, origin: event.origin });
+
+      if (type === "TAB_CHANGED" && tabId) {
+        handleTabChange(tabId);
       }
     };
-    
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
 
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [handleTabChange]);
+
+  // 언마운트 시 정리
+  useUnmount(() => {
+    webSpeechRef.current?.destroy();
+
+    try {
+      stopAvatar();
+    } catch {
+      // ignore
+    }
+  });
+
+  // ============================================
+  // 🔄 페이지 새로고침/닫기 전 세션 정리
+  // ============================================
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      console.log("🔄 beforeunload - 세션 정리 중...");
+      
+      // Web Speech 정리
+      if (webSpeechRef.current) {
+        webSpeechRef.current.destroy();
+        webSpeechRef.current = null;
+      }
+      
+      // HeyGen 세션 정리
+      if (avatarRef.current) {
+        try {
+          avatarRef.current.stopAvatar();
+        } catch {
+          // ignore
+        }
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [avatarRef]);
+
+  // 비디오 스트림 연결
   useEffect(() => {
     if (stream && mediaStream.current) {
       mediaStream.current.srcObject = stream;
-      mediaStream.current.onloadedmetadata = () => {
-        mediaStream.current!.play();
-      };
+      mediaStream.current.onloadedmetadata = () => mediaStream.current?.play();
     }
-  }, [mediaStream, stream]);
+  }, [stream]);
+
+  // ============================================
+  // UI
+  // ============================================
+  const getStatusText = () => {
+    if (isAvatarSpeaking) return "설명 중...";
+    if (isListening) return "듣는 중...";
+    if (isLoading) return "생각 중...";
+    return "말씀하세요";
+  };
+
+  const getStatusColor = () => {
+    if (isAvatarSpeaking) return "bg-blue-500";
+    if (isListening) return "bg-red-500 animate-pulse";
+    if (isLoading) return "bg-yellow-500";
+    return "bg-green-500";
+  };
 
   return (
     <div className="w-full h-full flex flex-col">
@@ -273,38 +634,74 @@ function InteractiveAvatar() {
               playsInline
               style={{ display: "block", width: "100%", height: "auto" }}
             />
-            
+
+            {/* 종료 버튼 */}
             <button
-              className="absolute top-2 right-2 w-7 h-7 bg-black/50 hover:bg-red-600 text-white rounded-full flex items-center justify-center text-xs transition-all"
-              title="종료"
-              onClick={() => stopAvatar()}
+              className="absolute top-2 right-2 w-7 h-7 bg-black/50 hover:bg-red-600 text-white rounded-full flex items-center justify-center text-xs"
+              onClick={() => resetSession()}
             >
               ✕
             </button>
 
+            {/* 마이크 토글 버튼 */}
+            <button
+              className={`absolute top-2 left-2 w-7 h-7 ${
+                isListening
+                  ? "bg-red-500 animate-pulse"
+                  : "bg-black/50 hover:bg-green-600"
+              } text-white rounded-full flex items-center justify-center text-sm`}
+              disabled={isAvatarSpeaking}
+              title={isListening ? "마이크 끄기" : "마이크 켜기"}
+              onClick={toggleMicrophone}
+            >
+              {isListening ? "🎤" : "🎙️"}
+            </button>
+
+            {/* 상태 표시 */}
             <div className="absolute bottom-2 left-2 flex items-center gap-2">
-              <div className={`w-3 h-3 rounded-full ${isListening ? 'bg-red-500 animate-pulse' : isLoading ? 'bg-yellow-500' : 'bg-green-500'}`} />
+              <div className={`w-3 h-3 rounded-full ${getStatusColor()}`} />
               <span className="text-white text-xs bg-black/50 px-2 py-1 rounded">
-                {isListening ? '듣는 중...' : isLoading ? '응답 생성 중...' : '말씀하세요'}
+                {getStatusText()}
               </span>
             </div>
+
+            {/* 현재 탭 표시 */}
+            {currentTab && (
+              <div className="absolute bottom-2 right-2">
+                <span className="text-white text-xs bg-purple-600/80 px-2 py-1 rounded">
+                  📑 {currentTab}
+                </span>
+              </div>
+            )}
+
+            {/* 중간 인식 결과 표시 */}
+            {interimTranscript && (
+              <div className="absolute bottom-10 left-2 right-2">
+                <div className="bg-black/70 text-white text-xs px-2 py-1 rounded">
+                  🎤 &quot;{interimTranscript}&quot;
+                </div>
+              </div>
+            )}
           </div>
 
+          {/* 텍스트 입력 */}
           <div className="p-2 bg-zinc-800 border-t border-zinc-700">
             <div className="flex gap-2">
               <input
                 className="flex-1 px-3 py-2 bg-zinc-700 text-white text-sm rounded-lg border border-zinc-600 focus:outline-none focus:border-purple-500 disabled:opacity-50"
-                disabled={isLoading}
+                disabled={isLoading || isAvatarSpeaking}
                 placeholder="또는 텍스트로 질문하세요..."
                 type="text"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
-                onKeyPress={handleKeyPress}
+                onKeyDown={(e) =>
+                  e.key === "Enter" && !e.shiftKey && handleSendMessage()
+                }
               />
               <button
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-600 text-white text-sm rounded-lg transition-colors"
-                disabled={isLoading || !inputText.trim()}
-                onClick={() => handleSendMessage()}
+                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-600 text-white text-sm rounded-lg"
+                disabled={isLoading || isAvatarSpeaking || !inputText.trim()}
+                onClick={handleSendMessage}
               >
                 {isLoading ? "..." : "전송"}
               </button>
@@ -312,17 +709,19 @@ function InteractiveAvatar() {
           </div>
         </div>
       ) : (
-        <div className="w-full h-full flex items-center justify-center bg-zinc-900">
+        <div className="w-full h-full flex items-center justify-center">
           {sessionState === StreamingAvatarSessionState.CONNECTING ? (
             <div className="flex flex-col items-center gap-3 text-white">
-              <div className="w-10 h-10 border-4 border-purple-500 border-t-transparent rounded-full animate-spin" />
-              <span className="text-lg">연결 중...</span>
+              <div className="w-8 h-8 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+              <span className="text-sm">연결 중...</span>
             </div>
           ) : (
-            <div className="flex flex-col items-center gap-3 text-white">
-              <span className="text-lg">🎮 게임을 시작하면</span>
-              <span className="text-lg">AI 도우미가 나타나요!</span>
-            </div>
+            <button
+              className="px-6 py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-full text-base font-medium shadow-lg"
+              onClick={startSession}
+            >
+              🎓 AI 가이드 시작
+            </button>
           )}
         </div>
       )}
