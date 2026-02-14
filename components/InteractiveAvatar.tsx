@@ -536,13 +536,13 @@ function InteractiveAvatar() {
   return (
     <div className="w-full h-full flex flex-col">
       {sessionState === StreamingAvatarSessionState.CONNECTED && stream ? (
-        <div className="flex-1 relative flex flex-col">
-          <div className="relative flex-shrink-0">
+        <div className="flex-1 relative">
+          <div className="relative w-full h-full">
             <video
               ref={mediaStream}
               autoPlay
               playsInline
-              style={{ display: "block", width: "100%", height: "auto" }}
+              style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }}
             />
 
             {/* 종료 버튼 */}
