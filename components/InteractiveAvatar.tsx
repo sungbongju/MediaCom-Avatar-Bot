@@ -584,30 +584,6 @@ function InteractiveAvatar() {
               </div>
             )}
           </div>
-
-          {/* 텍스트 입력 */}
-          <div className="p-2 bg-zinc-800 border-t border-zinc-700">
-            <div className="flex gap-2">
-              <input
-                className="flex-1 px-3 py-2 bg-zinc-700 text-white text-sm rounded-lg border border-zinc-600 focus:outline-none focus:border-purple-500 disabled:opacity-50"
-                disabled={isLoading || isAvatarSpeaking}
-                placeholder="텍스트로 질문하세요..."
-                type="text"
-                value={inputText}
-                onChange={(e) => setInputText(e.target.value)}
-                onKeyDown={(e) =>
-                  e.key === "Enter" && !e.shiftKey && handleSendMessage()
-                }
-              />
-              <button
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-zinc-600 text-white text-sm rounded-lg"
-                disabled={isLoading || isAvatarSpeaking || !inputText.trim()}
-                onClick={handleSendMessage}
-              >
-                {isLoading ? "..." : "전송"}
-              </button>
-            </div>
-          </div>
         </div>
       ) : (
         <div className="w-full h-full flex items-center justify-center bg-gradient-to-br from-zinc-900 via-zinc-800 to-zinc-900">
@@ -632,7 +608,7 @@ function InteractiveAvatar() {
               </div>
               <div className="text-center">
                 <p className="text-white text-sm font-medium">대화를 시작하려면 터치하세요</p>
-                <p className="text-zinc-500 text-xs mt-1">음성 · 텍스트 모두 가능합니다</p>
+                <p className="text-zinc-500 text-xs mt-1">음성으로 질문할 수 있습니다</p>
               </div>
             </div>
           )}
