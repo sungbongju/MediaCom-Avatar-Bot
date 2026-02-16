@@ -14,6 +14,7 @@
 
 import {
   AvatarQuality,
+  ElevenLabsModel,
   StreamingEvents,
   VoiceEmotion,
   StartAvatarRequest,
@@ -27,13 +28,14 @@ import { StreamingAvatarProvider, StreamingAvatarSessionState } from "./logic";
 import { AVATARS } from "@/app/lib/constants";
 import { WebSpeechRecognizer } from "@/app/lib/webSpeechAPI";
 
-// 아바타 설정 - Wayne 아바타 + 기본 음성
+// 아바타 설정 - Wayne 아바타 + ElevenLabs 한국어 음성
 const AVATAR_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
   avatarName: "Wayne_20240711",
   voice: {
     rate: 1.0,
     emotion: VoiceEmotion.FRIENDLY,
+    model: ElevenLabsModel.eleven_flash_v2_5,
   },
   language: "ko",
 };
@@ -70,6 +72,7 @@ function InteractiveAvatar() {
   // Web Speech API ref
   const webSpeechRef = useRef<WebSpeechRecognizer | null>(null);
   const isAvatarSpeakingRef = useRef(false);
+  const micStreamRef = useRef<MediaStream | null>(null);
 
   // ============================================
   // API 호출
@@ -277,6 +280,12 @@ function InteractiveAvatar() {
       webSpeechRef.current = null;
     }
 
+    // 마이크 스트림 정리
+    if (micStreamRef.current) {
+      micStreamRef.current.getTracks().forEach(track => track.stop());
+      micStreamRef.current = null;
+    }
+
     // HeyGen 세션 정리
     try {
       if (avatarRef.current) {
@@ -318,6 +327,14 @@ function InteractiveAvatar() {
     hasStartedRef.current = true;
 
     try {
+      // 🎤 마이크 권한을 미리 확보 (이후 Web Speech API 재시작 시 권한 팝업 방지)
+      try {
+        micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+        console.log("🎤 마이크 권한 확보 완료");
+      } catch (micError) {
+        console.error("🎤 마이크 권한 거부:", micError);
+      }
+
       const token = await fetchAccessToken();
       const avatar = initAvatar(token);
 
@@ -472,6 +489,8 @@ function InteractiveAvatar() {
   // 언마운트 시 정리
   useUnmount(() => {
     webSpeechRef.current?.destroy();
+    micStreamRef.current?.getTracks().forEach(track => track.stop());
+    micStreamRef.current = null;
 
     try {
       stopAvatar();
@@ -490,6 +509,11 @@ function InteractiveAvatar() {
       if (webSpeechRef.current) {
         webSpeechRef.current.destroy();
         webSpeechRef.current = null;
+      }
+
+      if (micStreamRef.current) {
+        micStreamRef.current.getTracks().forEach(track => track.stop());
+        micStreamRef.current = null;
       }
 
       if (avatarRef.current) {
