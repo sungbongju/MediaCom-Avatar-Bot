@@ -483,6 +483,12 @@ function InteractiveAvatar() {
     };
 
     window.addEventListener("message", handleMessage);
+
+    // 콘솔 테스트용: window.ask("질문")
+    (window as unknown as Record<string, unknown>).ask = (q: string) => {
+      handleUserSpeech(q);
+    };
+
     return () => window.removeEventListener("message", handleMessage);
   }, [handleUserSpeech, startSession]);
 
