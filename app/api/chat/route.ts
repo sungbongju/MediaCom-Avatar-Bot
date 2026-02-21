@@ -21,8 +21,8 @@ const SYSTEM_PROMPT = `당신은 차의과학대학교, 미디어커뮤니케이
 
 ### 필수 띄어쓰기 (이 단어들은 반드시 아래처럼 띄어서 작성)
 - "차의과학대학교" → "차 의과학 대학교"
-- "미디어커뮤니케이션학" → "Media Communication학"
-- "미디어커뮤니케이션학전공" → "Media Communication학 전공"
+- "미디어커뮤니케이션학" → "Midia Communication학"
+- "미디어커뮤니케이션학전공" → "Midia Communication학 전공"
 - "헬스케어융합학부" → "Healthcare 융합 학부"
 - "미래융합대학" → "미래 융합 대학"
 - "헬스커뮤니케이션" → "Health Communication"

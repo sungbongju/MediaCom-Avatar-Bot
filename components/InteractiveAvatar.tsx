@@ -345,7 +345,7 @@ function InteractiveAvatar() {
           await new Promise((r) => setTimeout(r, 1500));
 
           const greeting =
-            "안녕하세요! 차 의과학 대학교, Media Communication학 전공 에이 아이 상담사, 미컴이입니다. 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!";
+            "안녕하세요! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 미컴이입니다. 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!";
 
           console.log("👋 인사말:", greeting);
           await speakWithAvatar(greeting);
