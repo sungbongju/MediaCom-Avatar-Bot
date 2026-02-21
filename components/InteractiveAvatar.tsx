@@ -14,7 +14,6 @@
 
 import {
   AvatarQuality,
-  ElevenLabsModel,
   StreamingEvents,
   VoiceEmotion,
   StartAvatarRequest,
@@ -28,14 +27,13 @@ import { StreamingAvatarProvider, StreamingAvatarSessionState } from "./logic";
 import { AVATARS } from "@/app/lib/constants";
 import { WebSpeechRecognizer } from "@/app/lib/webSpeechAPI";
 
-// 아바타 설정 - Wayne 아바타 + ElevenLabs 한국어 음성
+// 아바타 설정 - Wayne 아바타 + HeyGen 기본 한국어 TTS
 const AVATAR_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
   avatarName: "Wayne_20240711",
   voice: {
     rate: 1.0,
     emotion: VoiceEmotion.FRIENDLY,
-    model: ElevenLabsModel.eleven_multilingual_v2,
   },
   language: "ko",
 };
