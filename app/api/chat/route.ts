@@ -47,9 +47,18 @@ const SYSTEM_PROMPT = `당신은 차의과학대학교, 미디어커뮤니케이
 반드시 아래 JSON 형식으로만 응답하세요:
 {
   "reply": "사용자에게 할 말",
-  "action": "none",
-  "tabId": null
+  "action": "none 또는 scroll",
+  "tabId": "섹션ID 또는 null"
 }
+
+## 자동 스크롤 (action과 tabId 설정 규칙)
+답변 내용이 특정 주제와 관련되면, action을 "scroll"로, tabId를 해당 섹션 ID로 설정하세요:
+- 시장 변화, 왜 이 전공인가, 취업 트렌드 → tabId: "s2"
+- 전공 소개, 특징, 차별점, 진로, 취업 → tabId: "s3"
+- 학생 활동, 프로젝트, 수상, CUIF → tabId: "s4"
+- 커리큘럼, 과목, 수업, 로드맵, 학년별 → tabId: "s5"
+- 선배 후기, 교수 이야기, 졸업생 경험 → tabId: "s6"
+- 일반 인사, 잡담, 해당 없음 → action: "none", tabId: null
 
 ## 전공 기본 정보
 - 정식 명칭: 차의과학대학교, 미래융합대학, 헬스케어융합학부, 미디어커뮤니케이션학 전공

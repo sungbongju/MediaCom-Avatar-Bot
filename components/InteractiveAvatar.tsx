@@ -176,6 +176,14 @@ function InteractiveAvatar() {
             { role: "assistant" as const, content: reply },
           ]);
 
+          // 랜딩페이지 자동 스크롤 요청
+          if (response.action === "scroll" && response.tabId) {
+            window.parent.postMessage(
+              { type: "SCROLL_TO", sectionId: response.tabId },
+              "*",
+            );
+          }
+
           // 아바타 발화
           await speakWithAvatar(reply);
 
@@ -420,6 +428,14 @@ function InteractiveAvatar() {
       ...newHistory,
       { role: "assistant" as const, content: reply },
     ]);
+
+    // 랜딩페이지 자동 스크롤 요청
+    if (response.action === "scroll" && response.tabId) {
+      window.parent.postMessage(
+        { type: "SCROLL_TO", sectionId: response.tabId },
+        "*",
+      );
+    }
 
     await speakWithAvatar(reply);
 
