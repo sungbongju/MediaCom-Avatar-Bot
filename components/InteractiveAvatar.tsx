@@ -7,6 +7,7 @@
  * 1. 음성 질문 → Web Speech API → OpenAI → REPEAT 발화
  * 2. 텍스트 질문 → OpenAI → REPEAT 발화
  * 3. 랜딩페이지 빠른 질문 버튼 → postMessage → 아바타 답변
+ * 4. 로그인 사용자 정보 수신 → 맞춤 인사말
  *
  * 핵심: 아바타가 말할 때 Web Speech 일시정지 → 자기 목소리 인식 방지
  * ================================================
@@ -68,6 +69,9 @@ function InteractiveAvatar() {
   const webSpeechRef = useRef<WebSpeechRecognizer | null>(null);
   const isAvatarSpeakingRef = useRef(false);
   const micStreamRef = useRef<MediaStream | null>(null);
+
+  // 로그인 사용자 정보 ref
+  const userInfoRef = useRef<{name: string; student_id: string} | null>(null);
 
   // ============================================
   // API 호출
@@ -347,8 +351,11 @@ function InteractiveAvatar() {
         if (!hasGreetedRef.current) {
           await new Promise((r) => setTimeout(r, 1500));
 
-          const greeting =
-            "안녕하세요! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 김정환 교수입니다. 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!";
+          // 로그인 사용자 맞춤 인사말
+          const userName = userInfoRef.current?.name;
+          const greeting = userName
+            ? `안녕하세요, ${userName}님! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 김정환 교수입니다. ${userName}님의 방문을 환영합니다! 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!`
+            : "안녕하세요! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 김정환 교수입니다. 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!";
 
           console.log("👋 인사말:", greeting);
           await speakWithAvatar(greeting);
@@ -479,6 +486,12 @@ function InteractiveAvatar() {
 
       const { type, question } = event.data || {};
       console.log("📥 Received message:", { type, question, origin: event.origin });
+
+      // 로그인된 사용자 정보 수신
+      if (type === "USER_INFO" && event.data.user) {
+        userInfoRef.current = event.data.user;
+        console.log("👤 사용자 정보 수신:", event.data.user.name);
+      }
 
       // 랜딩페이지 빠른 질문 버튼에서 전달된 질문
       if (type === "ASK_QUESTION" && question) {
