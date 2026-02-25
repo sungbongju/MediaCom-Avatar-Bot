@@ -8,6 +8,7 @@
  * 2. 텍스트 질문 → OpenAI → REPEAT 발화
  * 3. 랜딩페이지 빠른 질문 버튼 → postMessage → 아바타 답변
  * 4. 로그인 사용자 정보 수신 → 맞춤 인사말
+ * 5. 대화 내용 DB 저장 (save_chat API)
  *
  * 핵심: 아바타가 말할 때 Web Speech 일시정지 → 자기 목소리 인식 방지
  * ================================================
@@ -36,9 +37,55 @@ const AVATAR_CONFIG: StartAvatarRequest = {
   language: "ko",
 };
 
+// ============================================
+// DB 저장 API 설정
+// ============================================
+const API_BASE = "https://aiforalab.com/mediacom-api/api.php";
+
 interface ChatMessage {
   role: "user" | "assistant";
   content: string;
+}
+
+// DB에 대화 저장하는 함수
+async function saveChatToDB(
+  userMessage: string,
+  botResponse: string,
+  sessionId: string
+) {
+  try {
+    // localStorage에서 토큰 가져오기 (부모 창에서 전달받은 정보 사용)
+    const token =
+      (window as any).__mediacom_token ||
+      "";
+
+    if (!token) {
+      console.log("⚠️ 토큰 없음 - 대화 저장 생략 (게스트)");
+      return;
+    }
+
+    const response = await fetch(API_BASE, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "save_chat",
+        token: token,
+        user_message: userMessage,
+        bot_response: botResponse,
+        session_id: sessionId,
+        context: "avatar_bot",
+      }),
+    });
+
+    const data = await response.json();
+    if (data.success) {
+      console.log("💾 대화 DB 저장 완료");
+    } else {
+      console.warn("⚠️ 대화 저장 실패:", data.error);
+    }
+  } catch (error) {
+    console.error("❌ 대화 저장 에러:", error);
+  }
 }
 
 function InteractiveAvatar() {
@@ -71,7 +118,12 @@ function InteractiveAvatar() {
   const micStreamRef = useRef<MediaStream | null>(null);
 
   // 로그인 사용자 정보 ref
-  const userInfoRef = useRef<{name: string; student_id: string} | null>(null);
+  const userInfoRef = useRef<{ name: string; student_id: string } | null>(null);
+
+  // 세션 ID (대화 묶음 식별용)
+  const sessionIdRef = useRef<string>(
+    `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`
+  );
 
   // ============================================
   // API 호출
@@ -182,6 +234,19 @@ function InteractiveAvatar() {
               "*",
             );
           }
+
+          // ✅ 대화 내용 DB에 저장
+          saveChatToDB(transcript, reply, sessionIdRef.current);
+
+          // 랜딩페이지에도 대화 저장 알림 (체류시간 추적용)
+          window.parent.postMessage(
+            {
+              type: "CHAT_SAVED",
+              user_message: transcript,
+              bot_response: reply,
+            },
+            "*",
+          );
 
           // 아바타 발화
           await speakWithAvatar(reply);
@@ -319,6 +384,9 @@ function InteractiveAvatar() {
     setIsAvatarSpeaking(false);
     setInterimTranscript("");
 
+    // 새 세션 ID 생성
+    sessionIdRef.current = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
     await new Promise((r) => setTimeout(r, 1000));
     console.log("🔄 세션 초기화 완료");
   });
@@ -439,6 +507,9 @@ function InteractiveAvatar() {
       );
     }
 
+    // ✅ 대화 내용 DB에 저장
+    saveChatToDB(text, reply, sessionIdRef.current);
+
     await speakWithAvatar(reply);
 
     setIsLoading(false);
@@ -490,6 +561,10 @@ function InteractiveAvatar() {
       // 로그인된 사용자 정보 수신
       if (type === "USER_INFO" && event.data.user) {
         userInfoRef.current = event.data.user;
+        // 토큰도 저장 (대화 DB 저장에 사용)
+        if (event.data.token) {
+          (window as any).__mediacom_token = event.data.token;
+        }
         console.log("👤 사용자 정보 수신:", event.data.user.name);
       }
 
