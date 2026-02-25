@@ -31,7 +31,7 @@ import { WebSpeechRecognizer } from "@/app/lib/webSpeechAPI";
 // 아바타 설정 - Wayne 아바타 + ElevenLabs 한국어 음성
 const AVATAR_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Low,
-  avatarName: "Wayne_20240711",
+  avatarName: "bbf5d8ffc23a43e085cb8b2823dbe7fa",
   voice: {
     rate: 1.0,
     emotion: VoiceEmotion.FRIENDLY,
