@@ -456,12 +456,18 @@ function InteractiveAvatar() {
     hasStartedRef.current = true;
 
     try {
-      // 🎤 마이크 권한을 미리 확보 (이후 Web Speech API 재시작 시 권한 팝업 방지)
+      // 🎤 마이크 권한 확인 — 이미 허용된 경우 팝업 생략 (카카오톡 인앱 브라우저 중복 팝업 방지)
       try {
-        micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
-        console.log("🎤 마이크 권한 확보 완료");
-      } catch (micError) {
-        console.error("🎤 마이크 권한 거부:", micError);
+        const permResult = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        if (permResult.state === 'granted') {
+          console.log("🎤 마이크 권한 이미 허용됨 — getUserMedia 생략");
+        } else {
+          micStreamRef.current = await navigator.mediaDevices.getUserMedia({ audio: true });
+          console.log("🎤 마이크 권한 새로 확보 완료");
+        }
+      } catch (permError) {
+        // permissions API 미지원 브라우저 (카카오톡 등) — getUserMedia 생략, Web Speech가 알아서 요청
+        console.log("🎤 permissions API 미지원 — getUserMedia 생략, Web Speech에 위임");
       }
 
       const token = await fetchAccessToken();
