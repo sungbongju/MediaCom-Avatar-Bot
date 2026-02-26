@@ -7,7 +7,7 @@
  * 1. 음성 질문 → Web Speech API → OpenAI → REPEAT 발화
  * 2. 텍스트 질문 → OpenAI → REPEAT 발화
  * 3. 랜딩페이지 빠른 질문 버튼 → postMessage → 아바타 답변
- * 4. 로그인 사용자 정보 수신 → 맞춤 인사말
+ * 4. 로그인 사용자 정보 수신 → ★ 개인화 인사말 (재방문 이력 기반)
  * 5. 대화 내용 DB 저장 (save_chat API)
  *
  * 핵심: 아바타가 말할 때 Web Speech 일시정지 → 자기 목소리 인식 방지
@@ -88,6 +88,60 @@ async function saveChatToDB(
   }
 }
 
+// ============================================
+// ★ 개인화 인사말 생성 함수
+// ============================================
+function generateGreeting(userInfo: any): string {
+  const name = userInfo?.name || '';
+  const history = userInfo?.history;
+
+  // 이력 정보가 없거나 첫 방문인 경우
+  if (!history || history.visit_count <= 1) {
+    if (name) {
+      return `안녕하세요, ${name}님! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 김정환 교수입니다. ${name}님의 방문을 환영합니다! 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!`;
+    }
+    return `안녕하세요! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 김정환 교수입니다. 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!`;
+  }
+
+  // 재방문인 경우 — 개인화 인사말
+  const visitCount = history.visit_count;
+  const topics = history.recent_topics || [];
+
+  // 토픽 한국어 매핑
+  const topicNames: Record<string, string> = {
+    '커리큘럼': '커리큘럼',
+    '교수진': '교수진',
+    '진로': '진로와 취업',
+    '활동': '학생 활동',
+    '입학': '입학 정보',
+    '트랙': '세부 트랙',
+    '전공소개': '전공 소개',
+  };
+
+  // 토픽 문자열 생성
+  let topicStr = '';
+  if (topics.length === 1) {
+    topicStr = topicNames[topics[0]] || topics[0];
+  } else if (topics.length === 2) {
+    topicStr = `${topicNames[topics[0]] || topics[0]}과, ${topicNames[topics[1]] || topics[1]}`;
+  } else if (topics.length >= 3) {
+    topicStr = `${topicNames[topics[0]] || topics[0]}, ${topicNames[topics[1]] || topics[1]} 등`;
+  }
+
+  // 방문 횟수를 한글로
+  const visitKorean = ['', '', '두', '세', '네', '다섯', '여섯', '일곱', '여덟', '아홉', '열'];
+  const visitWord = visitCount <= 10
+    ? `${visitKorean[visitCount]}번째`
+    : `${visitCount}번째`;
+
+  // 인사말 조합
+  if (topicStr) {
+    return `${name}님, ${visitWord} 방문을 환영합니다! 지난번에는, ${topicStr}에 대해 물어보셨는데, 오늘은 어떤 부분이 궁금하세요?`;
+  }
+
+  return `${name}님, ${visitWord} 방문을 환영합니다! 오늘은 어떤 것이 궁금하세요?`;
+}
+
 function InteractiveAvatar() {
   const {
     initAvatar,
@@ -117,8 +171,8 @@ function InteractiveAvatar() {
   const isAvatarSpeakingRef = useRef(false);
   const micStreamRef = useRef<MediaStream | null>(null);
 
-  // 로그인 사용자 정보 ref
-  const userInfoRef = useRef<{ name: string; student_id: string } | null>(null);
+  // 로그인 사용자 정보 ref (★ history 포함)
+  const userInfoRef = useRef<any>(null);
 
   // 세션 ID (대화 묶음 식별용)
   const sessionIdRef = useRef<string>(
@@ -416,19 +470,30 @@ function InteractiveAvatar() {
       avatar.on(StreamingEvents.STREAM_READY, async (event) => {
         console.log("Stream ready:", event.detail);
 
+        // ★ 변경: USER_INFO가 이미 있으면 즉시 개인화 인사, 없으면 대기
         if (!hasGreetedRef.current) {
           await new Promise((r) => setTimeout(r, 1500));
 
-          // 로그인 사용자 맞춤 인사말
-          const userName = userInfoRef.current?.name;
-          const greeting = userName
-            ? `안녕하세요, ${userName}님! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 김정환 교수입니다. ${userName}님의 방문을 환영합니다! 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!`
-            : "안녕하세요! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 김정환 교수입니다. 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!";
-
-          console.log("👋 인사말:", greeting);
-          await speakWithAvatar(greeting);
-          setChatHistory([{ role: "assistant", content: greeting }]);
-          hasGreetedRef.current = true;
+          if (userInfoRef.current) {
+            // USER_INFO가 이미 도착한 경우 → 개인화 인사말
+            const greeting = generateGreeting(userInfoRef.current);
+            console.log("👋 개인화 인사말:", greeting);
+            await speakWithAvatar(greeting);
+            setChatHistory([{ role: "assistant", content: greeting }]);
+            hasGreetedRef.current = true;
+          } else {
+            // USER_INFO 대기 (3초 후 기본 인사말)
+            console.log("⏳ USER_INFO 대기 중... (3초 타임아웃)");
+            setTimeout(async () => {
+              if (!hasGreetedRef.current) {
+                const greeting = "안녕하세요! 차 의과학 대학교, Midia Communication학 전공 에이 아이 상담사, 김정환 교수입니다. 전공에 대해 궁금한 게 있으면, 편하게 물어보세요!";
+                console.log("👋 기본 인사말 (타임아웃):", greeting);
+                await speakWithAvatar(greeting);
+                setChatHistory([{ role: "assistant", content: greeting }]);
+                hasGreetedRef.current = true;
+              }
+            }, 3000);
+          }
         }
       });
 
@@ -558,14 +623,29 @@ function InteractiveAvatar() {
       const { type, question } = event.data || {};
       console.log("📥 Received message:", { type, question, origin: event.origin });
 
-      // 로그인된 사용자 정보 수신
+      // ★ 로그인된 사용자 정보 + 이력 수신
       if (type === "USER_INFO" && event.data.user) {
-        userInfoRef.current = event.data.user;
+        // userInfoRef에 user 정보 + history 함께 저장
+        userInfoRef.current = {
+          name: event.data.user.name,
+          student_id: event.data.user.student_id,
+          history: event.data.history || null,
+        };
+
         // 토큰도 저장 (대화 DB 저장에 사용)
         if (event.data.token) {
           (window as any).__mediacom_token = event.data.token;
         }
-        console.log("👤 사용자 정보 수신:", event.data.user.name);
+        console.log("👤 사용자 정보 + 이력 수신:", event.data.user.name, event.data.history);
+
+        // ★ 아바타가 이미 준비됐지만 아직 인사 안 한 경우 → 즉시 개인화 인사
+        if (avatarRef.current && hasGreetedRef.current === false && hasStartedRef.current) {
+          const greeting = generateGreeting(userInfoRef.current);
+          console.log("👋 개인화 인사말 (USER_INFO 도착 후):", greeting);
+          await speakWithAvatar(greeting);
+          setChatHistory([{ role: "assistant", content: greeting }]);
+          hasGreetedRef.current = true;
+        }
       }
 
       // 랜딩페이지 빠른 질문 버튼에서 전달된 질문
