@@ -189,11 +189,10 @@ function InteractiveAvatar() {
     return token;
   };
 
-  // 💬 채팅 API 호출 (Middleton Gemma4)
-  const MIDDLETON_API = "https://middleton.p-e.kr/finbot";
+  // 💬 채팅 API 호출 (OpenAI)
   const callOpenAI = async (message: string, history: ChatMessage[]) => {
     try {
-      const response = await fetch(MIDDLETON_API + "/api/mediacom-chat", {
+      const response = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -205,7 +204,7 @@ function InteractiveAvatar() {
       console.log("📦 API raw response:", data);
       return data;
     } catch (error) {
-      console.error("Gemma4 API error:", error);
+      console.error("OpenAI API error:", error);
       return { reply: "죄송합니다. 일시적인 오류가 발생했습니다. 다시 말씀해 주세요.", action: "none", tabId: null };
     }
   };
