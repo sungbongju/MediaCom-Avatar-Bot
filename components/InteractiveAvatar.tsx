@@ -30,10 +30,10 @@ import { StreamingAvatarProvider, StreamingAvatarSessionState } from "./logic";
 import { AVATARS } from "@/app/lib/constants";
 import { WebSpeechRecognizer } from "@/app/lib/webSpeechAPI";
 
-// 아바타 설정 - Wayne 아바타 + ElevenLabs 한국어 음성
+// 아바타 설정 - 김정환 교수님 아바타 + ElevenLabs 한국어 음성
 const AVATAR_CONFIG: StartAvatarRequest = {
   quality: AvatarQuality.Medium,
-  avatarName: "bbf5d8ffc23a43e085cb8b2823dbe7fa",
+  avatarName: "3b4864779536452b9aa0a52031bbd4d4",
   language: "ko",
 };
 
